@@ -46,6 +46,33 @@ void page_fault_handler_example(struct page_table *pt, int page)
     cout << "----------------------------------" << endl;
 }
 
+void random_replace(struct page_table *pt, int page) {
+    static std::random_device rd;
+    static std::mt19937 gen(rd());
+    std::uniform_int_distribution<int> dist(0, npages - 1);
+
+    int victim_page = dist(gen);  // Choose a random page to evict
+
+    int frame, bits;
+
+    cout << "page fault on page #" << page << endl;
+
+    // Print the page table contents
+    cout << "Before ---------------------------" << endl;
+    page_table_print(pt);
+    cout << "----------------------------------" << endl;
+    page_table_get_entry(pt, victim_page, &frame, &bits);
+    
+    // Evict victim page and load new page into the same frame
+    page_table_set_entry(pt, page, frame, PROT_READ | PROT_WRITE);
+
+    // Print the page table contents
+    cout << "After ----------------------------" << endl;
+    page_table_print(pt);
+    cout << "----------------------------------" << endl;
+}
+
+
 // TODO - Handler(s) and page eviction algorithms
 
 int main(int argc, char *argv[])
