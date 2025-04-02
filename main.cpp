@@ -13,6 +13,8 @@ how to use the page table and disk interfaces.
 #include <cassert>
 #include <iostream>
 #include <string.h>
+#include <random>
+#include <unistd.h>
 
 using namespace std;
 
@@ -21,7 +23,9 @@ typedef void (*program_f)(char *data, int length);
 
 // Number of physical frames
 int nframes;
-
+int npages;
+int last_victim,last_frame,evicted_page;
+bool flag = false;
 // Pointer to disk for access from handlers
 struct disk *disk = nullptr;
 
@@ -45,6 +49,7 @@ void page_fault_handler_example(struct page_table *pt, int page)
     page_table_print(pt);
     cout << "----------------------------------" << endl;
 }
+// 1. bookeeping frames used 2. handler function that decides which replacement policy
 
 void random_replace(struct page_table *pt, int page) {
     static std::random_device rd;
@@ -53,18 +58,51 @@ void random_replace(struct page_table *pt, int page) {
 
     int victim_page = dist(gen);  // Choose a random page to evict
 
-    int frame, bits;
+    int current_frame, current_bits, re_frame;
+    cout << "page fault on page #" << page << " "  << victim_page  << " " << current_frame << " " << current_bits <<endl;
+    page_table_get_entry(pt, victim_page, &current_frame, &current_bits);
+    
+    cout << "entry to evict" << page << " "  << victim_page  << " " << current_frame << " " << current_bits <<endl;
 
-    cout << "page fault on page #" << page << endl;
-
+    // make frame
+    if(npages >= nframes){
+        re_frame = page%nframes;
+    } else{
+        re_frame = page;
+    }
     // Print the page table contents
     cout << "Before ---------------------------" << endl;
     page_table_print(pt);
     cout << "----------------------------------" << endl;
-    page_table_get_entry(pt, victim_page, &frame, &bits);
+    printf("current_bits: %i\n",current_bits);
+    if (current_bits == 0x01) // catch write operation
+    {
+        printf("branch write taken\n");
+        page_table_print_entry(pt, page);
+        page_table_set_entry(pt, page, current_frame, PROT_READ | PROT_WRITE);
+        page_table_print_entry(pt, page);
+        
+    }
+    else if (current_bits == 0x11)  // evict dirty
+    {
+        printf("branch evict taken\n");
+        page_table_print_entry(pt, victim_page);
+        page_table_set_entry(pt, victim_page, current_frame, PROT_NONE);
+        disk_write(disk,current_frame,pt->physmem + current_frame*PAGE_SIZE);
+        disk_read(disk,current_frame,pt->physmem + page*PAGE_SIZE);
+        page_table_set_entry(pt, page, current_frame, PROT_READ);
+        page_table_print_entry(pt, victim_page);
+    }
+    else
+    {
+        page_table_set_entry(pt, page%nframes, re_frame, PROT_READ);
+    }
+
+    //page_table_get_entry(pt, victim_page, &frame, &bits);
     
     // Evict victim page and load new page into the same frame
-    page_table_set_entry(pt, page, frame, PROT_READ | PROT_WRITE);
+    // page_table_set_entry(pt, page, page, PROT_READ | PROT_WRITE);
+    printf("currentpage: %i\n", page);
 
     // Print the page table contents
     cout << "After ----------------------------" << endl;
@@ -85,7 +123,7 @@ int main(int argc, char *argv[])
     }
 
     // Parse command line arguments
-    int npages = atoi(argv[1]);
+    npages = atoi(argv[1]);
     nframes = atoi(argv[2]);
     const char *algorithm = argv[3];
     const char *program_name = argv[4];
@@ -136,7 +174,7 @@ int main(int argc, char *argv[])
     }
 
     // Create a page table
-    struct page_table *pt = page_table_create(npages, nframes, page_fault_handler_example /* TODO - Replace with your handler(s)*/);
+    struct page_table *pt = page_table_create(npages, nframes, random_replace);
     if (!pt)
     {
         cerr << "ERROR: Couldn't create page table: " << strerror(errno) << endl;
