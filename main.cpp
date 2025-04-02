@@ -37,9 +37,9 @@ void page_fault_handler_example(struct page_table *pt, int page)
 
     // Map the page to the same frame number and set to read/write
     // TODO - Disable exit and enable page table update for example
-    exit(1);
-    // page_table_set_entry(pt, page, page, PROT_READ | PROT_WRITE);
-
+    //exit(1);
+    page_table_set_entry(pt, page, page, PROT_READ | PROT_WRITE);
+    
     // Print the page table contents
     cout << "After ----------------------------" << endl;
     page_table_print(pt);
