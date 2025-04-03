@@ -54,7 +54,7 @@ void page_fault_handler_example(struct page_table *pt, int page)
 void random_replace(struct page_table *pt, int page) {
     static std::random_device rd;
     static std::mt19937 gen(rd());
-    std::uniform_int_distribution<int> dist(1, nframes); 
+    std::uniform_int_distribution<int> dist(0, nframes-1); 
 
     int victim_page = -1;
     int victim_frame = -1;
@@ -86,7 +86,7 @@ void random_replace(struct page_table *pt, int page) {
             disk_write(disk, victim_frame, pt->physmem + victim_frame * PAGE_SIZE);
         }
 
-        page_table_set_entry(pt, victim_page, 0, PROT_NONE);
+        page_table_set_entry(pt, victim_page, victim_frame, PROT_NONE);
 
         cout << "Loading new page #" << page << " into frame #" << victim_frame << endl;
         disk_read(disk, page, pt->physmem + victim_frame * PAGE_SIZE);
