@@ -54,7 +54,7 @@ void page_fault_handler_example(struct page_table *pt, int page)
 void random_replace(struct page_table *pt, int page) {
     static std::random_device rd;
     static std::mt19937 gen(rd());
-    std::uniform_int_distribution<int> dist(1, nframes - 1); 
+    std::uniform_int_distribution<int> dist(1, nframes); 
 
     int victim_page = -1;
     int victim_frame = -1;
