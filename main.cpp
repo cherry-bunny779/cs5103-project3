@@ -120,7 +120,6 @@ void page_fault_handler(struct page_table *pt, int page) {
         random_replace(pt, page);
         
         // After bringing it into memory, set the permissions to READ
-        page_table_set_entry(pt, page, frame, PROT_READ);
         cout << "Page #" << page << " is now in memory with READ permissions." << endl;
     }
     else if (bits == PROT_READ) {// If the page is in memory with READ permissions, change to READ/WRITE
