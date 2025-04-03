@@ -54,64 +54,85 @@ void page_fault_handler_example(struct page_table *pt, int page)
 void random_replace(struct page_table *pt, int page) {
     static std::random_device rd;
     static std::mt19937 gen(rd());
-    std::uniform_int_distribution<int> dist(0, npages - 1);
+    std::uniform_int_distribution<int> dist(1, nframes - 1); 
 
-    int victim_page = dist(gen);  // Choose a random page to evict
+    int victim_page = -1;
+    int victim_frame = -1;
+    int victim_bits = 0;
 
-    int current_frame, current_bits, re_frame;
-    cout << "page fault on page #" << page << " "  << victim_page  << " " << current_frame << " " << current_bits <<endl;
-    page_table_get_entry(pt, victim_page, &current_frame, &current_bits);
-    
-    cout << "entry to evict" << page << " "  << victim_page  << " " << current_frame << " " << current_bits <<endl;
-
-    // make frame
-    if(npages >= nframes){
-        re_frame = page%nframes;
-    } else{
-        re_frame = page;
-    }
-    // Print the page table contents
     cout << "Before ---------------------------" << endl;
     page_table_print(pt);
     cout << "----------------------------------" << endl;
-    printf("current_bits: %i\n",current_bits);
-    if (current_bits == 0x01) // catch write operation
-    {
-        printf("branch write taken\n");
-        page_table_print_entry(pt, page);
-        page_table_set_entry(pt, page, current_frame, PROT_READ | PROT_WRITE);
-        page_table_print_entry(pt, page);
-        
-    }
-    else if (current_bits == 0x11)  // evict dirty
-    {
-        printf("branch evict taken\n");
-        page_table_print_entry(pt, victim_page);
-        page_table_set_entry(pt, victim_page, current_frame, PROT_NONE);
-        disk_write(disk,current_frame,pt->physmem + current_frame*PAGE_SIZE);
-        disk_read(disk,current_frame,pt->physmem + page*PAGE_SIZE);
-        page_table_set_entry(pt, page, current_frame, PROT_READ);
-        page_table_print_entry(pt, victim_page);
-    }
-    else
-    {
-        page_table_set_entry(pt, page%nframes, re_frame, PROT_READ);
+
+    int rand_frame = dist(gen);
+    cout << "Generated random frame: " << rand_frame << endl;
+
+    // Loop through page_mapping to find the page that maps to rand_frame
+    for (int i = 0; i < pt->npages; ++i) {
+        if (pt->page_mapping[i] == rand_frame && pt->page_bits[i] != PROT_NONE) {
+            victim_page = i;
+            victim_frame = rand_frame;
+            victim_bits = pt->page_bits[i];
+            break;
+        }
     }
 
-    //page_table_get_entry(pt, victim_page, &frame, &bits);
-    
-    // Evict victim page and load new page into the same frame
-    // page_table_set_entry(pt, page, page, PROT_READ | PROT_WRITE);
-    printf("currentpage: %i\n", page);
+    if (victim_page != -1) {// valid victim page is found, evict it
+        cout << "Evicting page #" << victim_page << " from frame #" << victim_frame << " with bits " << victim_bits << endl;
 
-    // Print the page table contents
-    cout << "After ----------------------------" << endl;
+        // Handle dirty page (write to disk)
+        if (victim_bits == (PROT_READ | PROT_WRITE)) {
+            printf("Dirty victim page, writing to disk\n");
+            disk_write(disk, victim_frame, pt->physmem + victim_frame * PAGE_SIZE);
+        }
+
+        page_table_set_entry(pt, victim_page, 0, PROT_NONE);
+
+        cout << "Loading new page #" << page << " into frame #" << victim_frame << endl;
+        disk_read(disk, page, pt->physmem + victim_frame * PAGE_SIZE);
+        page_table_set_entry(pt, page, rand_frame, PROT_READ);  
+
+    } else {// No victim page found, likely because the frame is not in use
+        cout << "No page found to evict in frame " << rand_frame << endl;
+
+        cout << "Loading new page #" << page << " into frame #" << rand_frame << endl;
+        disk_read(disk, page, pt->physmem + rand_frame * PAGE_SIZE);
+        page_table_set_entry(pt, page, rand_frame, PROT_READ);  
+    }
+
+    cout << "After ---------------------------" << endl;
     page_table_print(pt);
     cout << "----------------------------------" << endl;
 }
 
 
-// TODO - Handler(s) and page eviction algorithms
+// Handler Wrapper
+void page_fault_handler(struct page_table *pt, int page) {
+    // get cur permissions
+    int frame, bits;
+    page_table_get_entry(pt, page, &frame, &bits);
+    cout << "Handler called on page #" << page << " frame " << frame <<" Bits " << bits <<endl;
+
+
+    if (bits == PROT_NONE) {
+        // If the page is not in memory, bring it in using random_replace
+        cout << "page fault on page #" << page <<endl;
+        random_replace(pt, page);
+        
+        // After bringing it into memory, set the permissions to READ
+        page_table_set_entry(pt, page, frame, PROT_READ);
+        cout << "Page #" << page << " is now in memory with READ permissions." << endl;
+    }
+    else if (bits == PROT_READ) {// If the page is in memory with READ permissions, change to READ/WRITE
+        cout << "Page #" << page << " already in memory with READ permissions, upgrading to READ/WRITE." << endl;
+        page_table_set_entry(pt, page, frame, PROT_READ | PROT_WRITE);
+    }
+    else {// We should never encounter a page with RW permissions, as it would be evicted to NONE
+        cerr << "ERROR: Invalid page state for page #" << page << ": Unexpected permissions!" << endl;
+        exit(1);
+    }
+}
+
 
 int main(int argc, char *argv[])
 {
@@ -174,7 +195,7 @@ int main(int argc, char *argv[])
     }
 
     // Create a page table
-    struct page_table *pt = page_table_create(npages, nframes, random_replace);
+    struct page_table *pt = page_table_create(npages, nframes, page_fault_handler);
     if (!pt)
     {
         cerr << "ERROR: Couldn't create page table: " << strerror(errno) << endl;
