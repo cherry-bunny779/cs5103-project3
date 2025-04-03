@@ -26,6 +26,7 @@ int nframes;
 int npages;
 int last_victim,last_frame,evicted_page;
 bool flag = false;
+int replacement_policy;
 // Pointer to disk for access from handlers
 struct disk *disk = nullptr;
 
@@ -90,14 +91,14 @@ void random_replace(struct page_table *pt, int page) {
 
         cout << "Loading new page #" << page << " into frame #" << victim_frame << endl;
         disk_read(disk, page, pt->physmem + victim_frame * PAGE_SIZE);
-        page_table_set_entry(pt, page, rand_frame, PROT_READ);  
+        page_table_set_entry(pt, page, victim_frame, PROT_READ);  
 
     } else {// No victim page found, likely because the frame is not in use
         cout << "No page found to evict in frame " << rand_frame << endl;
 
         cout << "Loading new page #" << page << " into frame #" << rand_frame << endl;
-        disk_read(disk, page, pt->physmem + rand_frame * PAGE_SIZE);
-        page_table_set_entry(pt, page, rand_frame, PROT_READ);  
+        disk_read(disk, page, pt->physmem + page * PAGE_SIZE); // <<------ This causing error if npage < nframe
+        page_table_set_entry(pt, page, page%nframes, PROT_READ);
     }
 
     cout << "After ---------------------------" << endl;
@@ -157,6 +158,19 @@ int main(int argc, char *argv[])
         exit(1);
     }
 
+    if(strcmp(algorithm, "rand"))
+    {
+        replacement_policy = 1;
+    } else if (strcmp(algorithm, "fifo"))
+    {
+        replacement_policy = 2;
+    } else if (strcmp(algorithm, "custom")){
+        replacement_policy = 3;
+    } else {
+        cerr << "ERROR: Unknown algorithm: " << algorithm << endl;
+        exit(1);
+    }
+    
     // Validate the program specified
     program_f program = NULL;
     if (!strcmp(program_name, "sort"))
