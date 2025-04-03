@@ -55,7 +55,7 @@ void page_fault_handler_example(struct page_table *pt, int page)
 void random_replace(struct page_table *pt, int page) {
     static std::random_device rd;
     static std::mt19937 gen(rd());
-    std::uniform_int_distribution<int> dist(0, nframes-1); 
+    std::uniform_int_distribution<int> dist(0, nframes - 1);
 
     int victim_page = -1;
     int victim_frame = -1;
@@ -68,7 +68,7 @@ void random_replace(struct page_table *pt, int page) {
     int rand_frame = dist(gen);
     cout << "Generated random frame: " << rand_frame << endl;
 
-    // Loop through page_mapping to find the page that maps to rand_frame
+    // Find victim page that maps to the selected random frame
     for (int i = 0; i < pt->npages; ++i) {
         if (pt->page_mapping[i] == rand_frame && pt->page_bits[i] != PROT_NONE) {
             victim_page = i;
@@ -78,33 +78,42 @@ void random_replace(struct page_table *pt, int page) {
         }
     }
 
-    if (victim_page != -1) {// valid victim page is found, evict it
+    if (victim_page != -1) { // Evict victim
         cout << "Evicting page #" << victim_page << " from frame #" << victim_frame << " with bits " << victim_bits << endl;
 
-        // Handle dirty page (write to disk)
-        if (victim_bits == (PROT_READ | PROT_WRITE)) {
-            printf("Dirty victim page, writing to disk\n");
-            disk_write(disk, victim_frame, pt->physmem + victim_frame * PAGE_SIZE);
+        // Write to disk if the page is dirty
+        if (victim_bits & PROT_WRITE) {
+            cout << "Dirty victim page, writing to disk\n";
+            disk_write(disk, victim_page, pt->physmem + victim_frame * PAGE_SIZE);
         }
 
         page_table_set_entry(pt, victim_page, victim_frame, PROT_NONE);
-
-        cout << "Loading new page #" << page << " into frame #" << victim_frame << endl;
-        disk_read(disk, page, pt->physmem + victim_frame * PAGE_SIZE);
-        page_table_set_entry(pt, page, victim_frame, PROT_READ);  
-
-    } else {// No victim page found, likely because the frame is not in use
-        cout << "No page found to evict in frame " << rand_frame << endl;
-
-        cout << "Loading new page #" << page << " into frame #" << rand_frame << endl;
-        disk_read(disk, page, pt->physmem + page * PAGE_SIZE); // <<------ This causing error if npage < nframe
-        page_table_set_entry(pt, page, page%nframes, PROT_READ);
+    } else {
+        // If the random frame isn't assigned, find a free frame
+        for (int f = 0; f < nframes; ++f) {
+            bool is_free = true;
+            for (int i = 0; i < npages; ++i) {
+                if (pt->page_mapping[i] == f && pt->page_bits[i] != PROT_NONE) {
+                    is_free = false;
+                    break;
+                }
+            }
+            if (is_free) {
+                rand_frame = f;
+                break;
+            }
+        }
     }
+
+    cout << "Loading new page #" << page << " into frame #" << rand_frame << endl;
+    disk_read(disk, page, pt->physmem + rand_frame * PAGE_SIZE);
+    page_table_set_entry(pt, page, rand_frame, PROT_READ);
 
     cout << "After ---------------------------" << endl;
     page_table_print(pt);
     cout << "----------------------------------" << endl;
 }
+
 
 
 // Handler Wrapper
