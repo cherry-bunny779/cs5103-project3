@@ -15,6 +15,7 @@ how to use the page table and disk interfaces.
 #include <string.h>
 #include <random>
 #include <unistd.h>
+#include <queue>
 
 using namespace std;
 
@@ -29,6 +30,10 @@ bool flag = false;
 int replacement_policy;
 // Pointer to disk for access from handlers
 struct disk *disk = nullptr;
+
+// Queue for FIFO Replacement Policy
+std::queue<int> frame_queue;
+// frame_queue.push(0);
 
 // Simple handler for pages == frames
 void page_fault_handler_example(struct page_table *pt, int page)
@@ -114,7 +119,74 @@ void random_replace(struct page_table *pt, int page) {
     cout << "----------------------------------" << endl;
 }
 
+/*
+    [To-do] FIX: loop leads to segfault. Problem: entry with R/W gets evicted 
+            immedately on next call of fifo_replace
+            Try: Don't replace unless all frames are full (R/W)
+*/
 
+void fifo_replace(struct page_table *pt, int page){
+    
+    int oldest_page = -1;
+    int oldest_frame = frame_queue.front();
+    int queue_size = frame_queue.size();
+    int oldest_bits = 0;
+
+    cout << "Now in FIFO Replace" << endl;
+    cout << "Before ---------------------------" << endl;
+    page_table_print(pt);
+    cout << "----------------------------------" << endl;
+
+    if (queue_size == nframes)
+    {
+        // If all frames R/W, find oldest page that maps to the oldest frame
+        for (int i = 0; i < pt->npages; ++i)
+        {
+            if (pt->page_mapping[i] == oldest_frame && pt->page_bits[i] != PROT_NONE)
+            {
+                oldest_page = i;
+                oldest_bits = pt->page_bits[i];
+                printf("oldest page: %i     oldest frame: %i \n", oldest_page, oldest_frame);
+                break;
+            }
+        }
+        frame_queue.pop();
+    }
+
+    if (oldest_page != -1) { // Evict victim - no evict unless frames full
+        cout << "Evicting page #" << oldest_page << " from frame #" << oldest_frame << " with bits " << oldest_bits << endl;
+
+        // Write to disk if the page is dirty
+        if (oldest_bits & PROT_WRITE) {
+            cout << "Dirty victim page, writing to disk\n";
+            disk_write(disk, oldest_page, pt->physmem + oldest_frame * PAGE_SIZE);
+        }
+
+        page_table_set_entry(pt, oldest_page, oldest_frame, PROT_NONE);
+    } else {
+        for (int f = 0; f < nframes; ++f) {
+            bool is_free = true;
+            for (int i = 0; i < npages; ++i) {
+                if (pt->page_mapping[i] == f && pt->page_bits[i] != PROT_NONE) {
+                    is_free = false;
+                    break;
+                }
+            }
+            if (is_free) {
+                oldest_frame = f; // variable used for 2 cases, not best practice
+                break;
+            }
+        }
+    }
+
+    cout << "Loading new page #" << page << " into frame #" << oldest_frame << endl;
+    disk_read(disk, page, pt->physmem + oldest_frame * PAGE_SIZE);
+    page_table_set_entry(pt, page, oldest_frame, PROT_READ);
+
+    cout << "After ---------------------------" << endl;
+    page_table_print(pt);
+    cout << "----------------------------------" << endl;
+}
 
 // Handler Wrapper
 void page_fault_handler(struct page_table *pt, int page) {
@@ -123,18 +195,26 @@ void page_fault_handler(struct page_table *pt, int page) {
     page_table_get_entry(pt, page, &frame, &bits);
     cout << "Handler called on page #" << page << " frame " << frame <<" Bits " << bits <<endl;
 
-
+    printf("replacement_policy: %i\n", replacement_policy);
     if (bits == PROT_NONE) {
         // If the page is not in memory, bring it in using random_replace
         cout << "page fault on page #" << page <<endl;
-        random_replace(pt, page);
-        
+        if (replacement_policy == 1){
+            random_replace(pt, page);
+        } else if (replacement_policy == 2){
+            printf("fifo replacement\n");
+            fifo_replace(pt, page);
+        } else if (replacement_policy == 3){
+            printf("custom - do nothing custom - do nothing custom - do nothing custom - do nothing\n");
+            random_replace(pt, page);
+        }
         // After bringing it into memory, set the permissions to READ
         cout << "Page #" << page << " is now in memory with READ permissions." << endl;
     }
     else if (bits == PROT_READ) {// If the page is in memory with READ permissions, change to READ/WRITE
         cout << "Page #" << page << " already in memory with READ permissions, upgrading to READ/WRITE." << endl;
         page_table_set_entry(pt, page, frame, PROT_READ | PROT_WRITE);
+        frame_queue.push(frame); // a frame could be replaced only when it's R/W status
     }
     else {// We should never encounter a page with RW permissions, as it would be evicted to NONE
         cerr << "ERROR: Invalid page state for page #" << page << ": Unexpected permissions!" << endl;
@@ -167,13 +247,14 @@ int main(int argc, char *argv[])
         exit(1);
     }
 
-    if(strcmp(algorithm, "rand"))
+    // Set replacement algorithm global var.
+    if(strcmp(algorithm, "rand") == 0)
     {
         replacement_policy = 1;
-    } else if (strcmp(algorithm, "fifo"))
+    } else if (strcmp(algorithm, "fifo") == 0)
     {
         replacement_policy = 2;
-    } else if (strcmp(algorithm, "custom")){
+    } else if (strcmp(algorithm, "custom") == 0){
         replacement_policy = 3;
     } else {
         cerr << "ERROR: Unknown algorithm: " << algorithm << endl;
