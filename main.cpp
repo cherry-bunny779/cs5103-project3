@@ -15,6 +15,7 @@ how to use the page table and disk interfaces.
 #include <string.h>
 #include <random>
 #include <unistd.h>
+#include <queue>
 
 using namespace std;
 
@@ -29,6 +30,9 @@ bool flag = false;
 int replacement_policy;
 // Pointer to disk for access from handlers
 struct disk *disk = nullptr;
+// queue for fifo
+queue<int> fifo_queue;
+int next_free_frame = 0;
 
 // Simple handler for pages == frames
 void page_fault_handler_example(struct page_table *pt, int page)
@@ -114,10 +118,50 @@ void random_replace(struct page_table *pt, int page) {
     cout << "----------------------------------" << endl;
 }
 
-void fifo_replace(struct page_table *pt, int page){
-    printf("FIFO replace activated\n");
-    exit(1);
+void fifo_replace(struct page_table *pt, int page) {
+    cout << "Before ---------------------------" << endl;
+    page_table_print(pt);
+    cout << "----------------------------------" << endl;
+
+    int frame;
+
+    if (next_free_frame < nframes) {
+        // Still have free frames
+        frame = next_free_frame;
+        next_free_frame++;
+        cout << "Using free frame #" << frame << endl;
+    } else {
+        // No free frames — evict the oldest page
+        int victim_page = fifo_queue.front();
+        fifo_queue.pop();
+
+        int victim_bits;
+        page_table_get_entry(pt, victim_page, &frame, &victim_bits);
+
+        cout << "Evicting page #" << victim_page << " from frame #" << frame << endl;
+
+        if (victim_bits & PROT_WRITE) {
+            cout << "Writing dirty page #" << victim_page << " back to disk" << endl;
+            disk_write(disk, victim_page, pt->physmem + frame * PAGE_SIZE);
+        }
+
+        page_table_set_entry(pt, victim_page, frame, PROT_NONE);
+    }
+
+    // Load new page
+    cout << "Reading page #" << page << " into frame #" << frame << endl;
+    disk_read(disk, page, pt->physmem + frame * PAGE_SIZE);
+    page_table_set_entry(pt, page, frame, PROT_READ);
+    pt->page_mapping[page] = frame;
+
+    fifo_queue.push(page); // push the page 
+
+    cout << "After ---------------------------" << endl;
+    page_table_print(pt);
+    cout << "---------------------------------" << endl;
 }
+
+
 
 void custom_replace(struct page_table *pt, int page){
     printf("Custom replace activated\n");
@@ -136,7 +180,6 @@ void page_fault_handler(struct page_table *pt, int page) {
 
     if (bits == PROT_NONE) {
         // If the page is not in memory, bring it in using random_replace
-        printf("Replacement Policy: %d\n",replacement_policy);
         cout << "page fault on page #" << page <<endl;
         if (replacement_policy == 1){
             random_replace(pt, page);
@@ -178,8 +221,6 @@ int main(int argc, char *argv[])
     const char *algorithm = argv[3];
     const char *program_name = argv[4];
 
-    printf("%s\n",algorithm);
-
     // Validate the algorithm specified
     if ((strcmp(algorithm, "rand") != 0) &&
         (strcmp(algorithm, "fifo") != 0) &&
@@ -189,18 +230,13 @@ int main(int argc, char *argv[])
         exit(1);
     }
 
-    printf("%s\n",algorithm);
-
     if(!strcmp(algorithm, "rand"))
     {
-        printf("rand activated");
         replacement_policy = 1;
     } else if (!strcmp(algorithm, "fifo"))
     {
-        printf("fifo activated");
         replacement_policy = 2;
     } else if (!strcmp(algorithm, "custom")){
-        printf("custom activated");
         replacement_policy = 3;
     } else {
         cerr << "ERROR: Unknown algorithm: " << algorithm << endl;
@@ -234,6 +270,7 @@ int main(int argc, char *argv[])
     }
 
     // TODO - Any init needed
+    
 
     // Create a virtual disk
     disk = disk_open("myvirtualdisk", npages);
