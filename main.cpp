@@ -114,6 +114,16 @@ void random_replace(struct page_table *pt, int page) {
     cout << "----------------------------------" << endl;
 }
 
+void fifo_replace(struct page_table *pt, int page){
+    printf("FIFO replace activated\n");
+    exit(1);
+}
+
+void custom_replace(struct page_table *pt, int page){
+    printf("Custom replace activated\n");
+    exit(1);
+}
+
 
 
 // Handler Wrapper
@@ -126,8 +136,18 @@ void page_fault_handler(struct page_table *pt, int page) {
 
     if (bits == PROT_NONE) {
         // If the page is not in memory, bring it in using random_replace
+        printf("Replacement Policy: %d\n",replacement_policy);
         cout << "page fault on page #" << page <<endl;
-        random_replace(pt, page);
+        if (replacement_policy == 1){
+            random_replace(pt, page);
+        }else if(replacement_policy == 2){
+            fifo_replace(pt,page);
+        }else if(replacement_policy == 3){
+            custom_replace(pt,page);
+        }else{
+            printf("Invalid replacement policy");
+            exit(1);
+        }
         
         // After bringing it into memory, set the permissions to READ
         cout << "Page #" << page << " is now in memory with READ permissions." << endl;
@@ -158,6 +178,8 @@ int main(int argc, char *argv[])
     const char *algorithm = argv[3];
     const char *program_name = argv[4];
 
+    printf("%s\n",algorithm);
+
     // Validate the algorithm specified
     if ((strcmp(algorithm, "rand") != 0) &&
         (strcmp(algorithm, "fifo") != 0) &&
@@ -167,13 +189,18 @@ int main(int argc, char *argv[])
         exit(1);
     }
 
-    if(strcmp(algorithm, "rand"))
+    printf("%s\n",algorithm);
+
+    if(!strcmp(algorithm, "rand"))
     {
+        printf("rand activated");
         replacement_policy = 1;
-    } else if (strcmp(algorithm, "fifo"))
+    } else if (!strcmp(algorithm, "fifo"))
     {
+        printf("fifo activated");
         replacement_policy = 2;
-    } else if (strcmp(algorithm, "custom")){
+    } else if (!strcmp(algorithm, "custom")){
+        printf("custom activated");
         replacement_policy = 3;
     } else {
         cerr << "ERROR: Unknown algorithm: " << algorithm << endl;
