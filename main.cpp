@@ -16,6 +16,7 @@ how to use the page table and disk interfaces.
 #include <random>
 #include <unistd.h>
 #include <queue>
+#include <vector>
 
 using namespace std;
 
@@ -33,6 +34,9 @@ struct disk *disk = nullptr;
 // queue for fifo
 queue<int> fifo_queue;
 int next_free_frame = 0;
+// init clock for custom alg
+vector<int> clock_pages;
+int clock_hand = 0;
 
 // Simple handler for pages == frames
 void page_fault_handler_example(struct page_table *pt, int page)
@@ -163,9 +167,57 @@ void fifo_replace(struct page_table *pt, int page) {
 
 
 
-void custom_replace(struct page_table *pt, int page){
-    printf("Custom replace activated\n");
-    exit(1);
+void custom_replace(struct page_table *pt, int page) {
+    cout << "Before ---------------------------" << endl;
+    page_table_print(pt);
+    cout << "----------------------------------" << endl;
+
+    int frame;
+
+    if (next_free_frame < nframes) {
+        frame = next_free_frame++;
+        cout << "Using free frame #" << frame << endl;
+    } else {
+        while (true) {
+            int candidate_page = clock_pages[clock_hand];
+            int candidate_frame, candidate_bits;
+            page_table_get_entry(pt, candidate_page, &candidate_frame, &candidate_bits);
+
+            if (candidate_bits & PROT_READ) {
+                page_table_set_entry(pt, candidate_page, candidate_frame, PROT_READ);
+                cout << "Second chance for page #" << candidate_page << endl;
+            } else {
+                // Evict this page
+                cout << "Evicting page #" << candidate_page << " from frame #" << candidate_frame << endl;
+                if (candidate_bits & PROT_WRITE) {
+                    cout << "Writing dirty page #" << candidate_page << " back to disk" << endl;
+                    disk_write(disk, candidate_page, pt->physmem + candidate_frame * PAGE_SIZE);
+                }
+                page_table_set_entry(pt, candidate_page, candidate_frame, PROT_NONE);
+                frame = candidate_frame;
+                clock_pages[clock_hand] = page; // Replace with new page
+                break;
+            }
+
+            clock_hand = (clock_hand + 1) % clock_pages.size();
+        }
+    }
+
+    // Load new page
+    cout << "Reading page #" << page << " into frame #" << frame << endl;
+    disk_read(disk, page, pt->physmem + frame * PAGE_SIZE);
+    page_table_set_entry(pt, page, frame, PROT_READ);
+    pt->page_mapping[page] = frame;
+
+    if (next_free_frame <= nframes) {
+        clock_pages.push_back(page);
+    }
+
+    clock_hand = (clock_hand + 1) % nframes;
+
+    cout << "After ---------------------------" << endl;
+    page_table_print(pt);
+    cout << "----------------------------------" << endl;
 }
 
 
