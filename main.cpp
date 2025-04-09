@@ -15,6 +15,8 @@ how to use the page table and disk interfaces.
 #include <string.h>
 #include <random>
 #include <unistd.h>
+#include <queue>
+#include <vector>
 
 using namespace std;
 
@@ -24,11 +26,19 @@ typedef void (*program_f)(char *data, int length);
 // Number of physical frames
 int nframes;
 int npages;
+// Bookeeping ints for submission requirement
+int diskReads,diskWrites,numPagefaults;
 int last_victim,last_frame,evicted_page;
 bool flag = false;
 int replacement_policy;
 // Pointer to disk for access from handlers
 struct disk *disk = nullptr;
+// queue for fifo
+queue<int> fifo_queue;
+int next_free_frame = 0;
+// init clock for custom alg
+vector<int> clock_pages;
+int clock_hand = 0;
 
 // Simple handler for pages == frames
 void page_fault_handler_example(struct page_table *pt, int page)
@@ -55,20 +65,20 @@ void page_fault_handler_example(struct page_table *pt, int page)
 void random_replace(struct page_table *pt, int page) {
     static std::random_device rd;
     static std::mt19937 gen(rd());
-    std::uniform_int_distribution<int> dist(0, nframes-1); 
+    std::uniform_int_distribution<int> dist(0, nframes - 1);
 
     int victim_page = -1;
     int victim_frame = -1;
     int victim_bits = 0;
 
-    cout << "Before ---------------------------" << endl;
-    page_table_print(pt);
-    cout << "----------------------------------" << endl;
+    //cout << "Before ---------------------------" << endl;
+    //page_table_print(pt);
+    //cout << "----------------------------------" << endl;
 
     int rand_frame = dist(gen);
-    cout << "Generated random frame: " << rand_frame << endl;
+    //cout << "Generated random frame: " << rand_frame << endl;
 
-    // Loop through page_mapping to find the page that maps to rand_frame
+    // Find victim page that maps to the selected random frame
     for (int i = 0; i < pt->npages; ++i) {
         if (pt->page_mapping[i] == rand_frame && pt->page_bits[i] != PROT_NONE) {
             victim_page = i;
@@ -78,28 +88,138 @@ void random_replace(struct page_table *pt, int page) {
         }
     }
 
-    if (victim_page != -1) {// valid victim page is found, evict it
-        cout << "Evicting page #" << victim_page << " from frame #" << victim_frame << " with bits " << victim_bits << endl;
+    if (victim_page != -1) { // Evict victim
+        //cout << "Evicting page #" << victim_page << " from frame #" << victim_frame << " with bits " << victim_bits << endl;
 
-        // Handle dirty page (write to disk)
-        if (victim_bits == (PROT_READ | PROT_WRITE)) {
-            printf("Dirty victim page, writing to disk\n");
-            disk_write(disk, victim_frame, pt->physmem + victim_frame * PAGE_SIZE);
+        // Write to disk if the page is dirty
+        if (victim_bits & PROT_WRITE) {
+            //cout << "Dirty victim page, writing to disk\n";
+            disk_write(disk, victim_page, pt->physmem + victim_frame * PAGE_SIZE);
+            diskWrites++;
         }
 
         page_table_set_entry(pt, victim_page, victim_frame, PROT_NONE);
-
-        cout << "Loading new page #" << page << " into frame #" << victim_frame << endl;
-        disk_read(disk, page, pt->physmem + victim_frame * PAGE_SIZE);
-        page_table_set_entry(pt, page, victim_frame, PROT_READ);  
-
-    } else {// No victim page found, likely because the frame is not in use
-        cout << "No page found to evict in frame " << rand_frame << endl;
-
-        cout << "Loading new page #" << page << " into frame #" << rand_frame << endl;
-        disk_read(disk, page, pt->physmem + page * PAGE_SIZE); // <<------ This causing error if npage < nframe
-        page_table_set_entry(pt, page, page%nframes, PROT_READ);
+    } else {
+        // If the random frame isn't assigned, find a free frame
+        for (int f = 0; f < nframes; ++f) {
+            bool is_free = true;
+            for (int i = 0; i < npages; ++i) {
+                if (pt->page_mapping[i] == f && pt->page_bits[i] != PROT_NONE) {
+                    is_free = false;
+                    break;
+                }
+            }
+            if (is_free) {
+                rand_frame = f;
+                break;
+            }
+        }
     }
+
+    //cout << "Loading new page #" << page << " into frame #" << rand_frame << endl;
+    disk_read(disk, page, pt->physmem + rand_frame * PAGE_SIZE);
+    diskReads++;
+    page_table_set_entry(pt, page, rand_frame, PROT_READ);
+
+    //cout << "After ---------------------------" << endl;
+    //page_table_print(pt);
+    //cout << "----------------------------------" << endl;
+}
+
+void fifo_replace(struct page_table *pt, int page) {
+    //cout << "Before ---------------------------" << endl;
+    //page_table_print(pt);
+    //cout << "----------------------------------" << endl;
+
+    int frame;
+
+    if (next_free_frame < nframes) {
+        // Still have free frames
+        frame = next_free_frame;
+        next_free_frame++;
+        //cout << "Using free frame #" << frame << endl;
+    } else {
+        // No free frames — evict the oldest page
+        int victim_page = fifo_queue.front();
+        fifo_queue.pop();
+
+        int victim_bits;
+        page_table_get_entry(pt, victim_page, &frame, &victim_bits);
+
+        //cout << "Evicting page #" << victim_page << " from frame #" << frame << endl;
+
+        if (victim_bits & PROT_WRITE) {
+            //cout << "Writing dirty page #" << victim_page << " back to disk" << endl;
+            disk_write(disk, victim_page, pt->physmem + frame * PAGE_SIZE);
+            diskWrites++;
+        }
+
+        page_table_set_entry(pt, victim_page, frame, PROT_NONE);
+    }
+
+    // Load new page
+    //cout << "Reading page #" << page << " into frame #" << frame << endl;
+    disk_read(disk, page, pt->physmem + frame * PAGE_SIZE);
+    diskReads++;
+    page_table_set_entry(pt, page, frame, PROT_READ);
+    pt->page_mapping[page] = frame;
+
+    fifo_queue.push(page); // push the page 
+
+    //cout << "After ---------------------------" << endl;
+    //page_table_print(pt);
+    //cout << "---------------------------------" << endl;
+}
+
+
+
+void custom_replace(struct page_table *pt, int page) {
+    cout << "Before ---------------------------" << endl;
+    page_table_print(pt);
+    cout << "----------------------------------" << endl;
+
+    int frame;
+
+    if (next_free_frame < nframes) {
+        frame = next_free_frame++;
+        cout << "Using free frame #" << frame << endl;
+    } else {
+        while (true) {
+            int candidate_page = clock_pages[clock_hand];
+            int candidate_frame, candidate_bits;
+            page_table_get_entry(pt, candidate_page, &candidate_frame, &candidate_bits);
+
+            if (candidate_bits & PROT_READ) {
+                page_table_set_entry(pt, candidate_page, candidate_frame, PROT_READ);
+                cout << "Second chance for page #" << candidate_page << endl;
+            } else {
+                // Evict this page
+                cout << "Evicting page #" << candidate_page << " from frame #" << candidate_frame << endl;
+                if (candidate_bits & PROT_WRITE) {
+                    cout << "Writing dirty page #" << candidate_page << " back to disk" << endl;
+                    disk_write(disk, candidate_page, pt->physmem + candidate_frame * PAGE_SIZE);
+                }
+                page_table_set_entry(pt, candidate_page, candidate_frame, PROT_NONE);
+                frame = candidate_frame;
+                clock_pages[clock_hand] = page; // Replace with new page
+                break;
+            }
+
+            clock_hand = (clock_hand + 1) % clock_pages.size();
+        }
+    }
+
+    // Load new page
+    cout << "Reading page #" << page << " into frame #" << frame << endl;
+    disk_read(disk, page, pt->physmem + frame * PAGE_SIZE);
+    page_table_set_entry(pt, page, frame, PROT_READ);
+    pt->page_mapping[page] = frame;
+
+    if (next_free_frame <= nframes) {
+        clock_pages.push_back(page);
+    }
+
+    clock_hand = (clock_hand + 1) % nframes;
 
     cout << "After ---------------------------" << endl;
     page_table_print(pt);
@@ -107,24 +227,36 @@ void random_replace(struct page_table *pt, int page) {
 }
 
 
+
 // Handler Wrapper
 void page_fault_handler(struct page_table *pt, int page) {
+
+    numPagefaults++;
     // get cur permissions
     int frame, bits;
     page_table_get_entry(pt, page, &frame, &bits);
-    cout << "Handler called on page #" << page << " frame " << frame <<" Bits " << bits <<endl;
+    //cout << "Handler called on page #" << page << " frame " << frame <<" Bits " << bits <<endl;
 
 
     if (bits == PROT_NONE) {
         // If the page is not in memory, bring it in using random_replace
-        cout << "page fault on page #" << page <<endl;
-        random_replace(pt, page);
+        //cout << "page fault on page #" << page <<endl;
+        if (replacement_policy == 1){
+            random_replace(pt, page);
+        }else if(replacement_policy == 2){
+            fifo_replace(pt,page);
+        }else if(replacement_policy == 3){
+            custom_replace(pt,page);
+        }else{
+            printf("Invalid replacement policy");
+            exit(1);
+        }
         
         // After bringing it into memory, set the permissions to READ
-        cout << "Page #" << page << " is now in memory with READ permissions." << endl;
+        //cout << "Page #" << page << " is now in memory with READ permissions." << endl;
     }
     else if (bits == PROT_READ) {// If the page is in memory with READ permissions, change to READ/WRITE
-        cout << "Page #" << page << " already in memory with READ permissions, upgrading to READ/WRITE." << endl;
+        //cout << "Page #" << page << " already in memory with READ permissions, upgrading to READ/WRITE." << endl;
         page_table_set_entry(pt, page, frame, PROT_READ | PROT_WRITE);
     }
     else {// We should never encounter a page with RW permissions, as it would be evicted to NONE
@@ -158,13 +290,13 @@ int main(int argc, char *argv[])
         exit(1);
     }
 
-    if(strcmp(algorithm, "rand"))
+    if(!strcmp(algorithm, "rand"))
     {
         replacement_policy = 1;
-    } else if (strcmp(algorithm, "fifo"))
+    } else if (!strcmp(algorithm, "fifo"))
     {
         replacement_policy = 2;
-    } else if (strcmp(algorithm, "custom")){
+    } else if (!strcmp(algorithm, "custom")){
         replacement_policy = 3;
     } else {
         cerr << "ERROR: Unknown algorithm: " << algorithm << endl;
@@ -198,6 +330,7 @@ int main(int argc, char *argv[])
     }
 
     // TODO - Any init needed
+    
 
     // Create a virtual disk
     disk = disk_open("myvirtualdisk", npages);
@@ -218,6 +351,7 @@ int main(int argc, char *argv[])
     // Run the specified program
     char *virtmem = page_table_get_virtmem(pt);
     program(virtmem, npages * PAGE_SIZE);
+    printf("Number of Page Faults: %i; Disk Reads: %i; Disk Writes: %i\n",numPagefaults,diskReads,diskWrites);
 
     // Clean up the page table and disk
     page_table_delete(pt);
