@@ -34,7 +34,8 @@ struct disk *disk = nullptr;
 // queue for fifo
 queue<int> fifo_queue;
 int next_free_frame = 0;
-// init clock for custom alg
+// init clock and recently used vector for custom alg
+vector<bool> recently_used; // same size as npages
 vector<int> clock_pages;
 int clock_hand = 0;
 
@@ -183,8 +184,14 @@ void custom_replace(struct page_table *pt, int page) {
             int candidate_frame, candidate_bits;
             page_table_get_entry(pt, candidate_page, &candidate_frame, &candidate_bits);
 
-            if (candidate_bits & PROT_READ) {
-                page_table_set_entry(pt, candidate_page, candidate_frame, PROT_READ);
+            if ((candidate_bits & (PROT_READ | PROT_WRITE)) == 0) { //not a valid candidate page because it isn't in a frame
+                clock_hand = (clock_hand + 1) % clock_pages.size();
+                continue;
+            }
+
+            if (recently_used[candidate_page]) {
+                recently_used[candidate_page] = false; //remove its second chance bit
+                // page_table_set_entry(pt, candidate_page, candidate_frame, PROT_READ);  //Old buggy implementation
                 cout << "Second chance for page #" << candidate_page << endl;
             } else {
                 // Evict this page
@@ -249,6 +256,7 @@ void page_fault_handler(struct page_table *pt, int page) {
     }
     else if (bits == PROT_READ) {// If the page is in memory with READ permissions, change to READ/WRITE
         cout << "Page #" << page << " already in memory with READ permissions, upgrading to READ/WRITE." << endl;
+        recently_used[page] = true; //mark as used
         page_table_set_entry(pt, page, frame, PROT_READ | PROT_WRITE);
     }
     else {// We should never encounter a page with RW permissions, as it would be evicted to NONE
@@ -322,7 +330,8 @@ int main(int argc, char *argv[])
     }
 
     // TODO - Any init needed
-    
+    recently_used.resize(npages, false);
+
 
     // Create a virtual disk
     disk = disk_open("myvirtualdisk", npages);
