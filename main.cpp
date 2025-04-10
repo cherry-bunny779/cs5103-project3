@@ -175,15 +175,15 @@ void fifo_replace(struct page_table *pt, int page) {
 
 
 void custom_replace(struct page_table *pt, int page) {
-    cout << "Before ---------------------------" << endl;
-    page_table_print(pt);
-    cout << "----------------------------------" << endl;
+    // cout << "Before ---------------------------" << endl;
+    // page_table_print(pt);
+    // cout << "----------------------------------" << endl;
 
     int frame;
 
     if (next_free_frame < nframes) {
         frame = next_free_frame++;
-        cout << "Using free frame #" << frame << endl;
+        //cout << "Using free frame #" << frame << endl;
     } else {
         while (true) {
             int candidate_page = clock_pages[clock_hand];
@@ -197,12 +197,12 @@ void custom_replace(struct page_table *pt, int page) {
             if (recently_used[candidate_page]) {
                 recently_used[candidate_page] = false; //remove its second chance bit
                 // page_table_set_entry(pt, candidate_page, candidate_frame, PROT_READ);  //Old buggy implementation
-                cout << "Second chance for page #" << candidate_page << endl;
+                //cout << "Second chance for page #" << candidate_page << endl;
             } else {
                 // Evict this page
-                cout << "Evicting page #" << candidate_page << " from frame #" << candidate_frame << endl;
+                //cout << "Evicting page #" << candidate_page << " from frame #" << candidate_frame << endl;
                 if (candidate_bits & PROT_WRITE) {
-                    cout << "Writing dirty page #" << candidate_page << " back to disk" << endl;
+                    //cout << "Writing dirty page #" << candidate_page << " back to disk" << endl;
                     disk_write(disk, candidate_page, pt->physmem + candidate_frame * PAGE_SIZE);
                 }
                 page_table_set_entry(pt, candidate_page, candidate_frame, PROT_NONE);
@@ -216,7 +216,7 @@ void custom_replace(struct page_table *pt, int page) {
     }
 
     // Load new page
-    cout << "Reading page #" << page << " into frame #" << frame << endl;
+    //cout << "Reading page #" << page << " into frame #" << frame << endl;
     disk_read(disk, page, pt->physmem + frame * PAGE_SIZE);
     page_table_set_entry(pt, page, frame, PROT_READ);
     pt->page_mapping[page] = frame;
@@ -227,9 +227,9 @@ void custom_replace(struct page_table *pt, int page) {
 
     clock_hand = (clock_hand + 1) % nframes;
 
-    cout << "After ---------------------------" << endl;
-    page_table_print(pt);
-    cout << "----------------------------------" << endl;
+    // cout << "After ---------------------------" << endl;
+    // page_table_print(pt);
+    // cout << "----------------------------------" << endl;
 }
 
 
