@@ -204,6 +204,7 @@ void custom_replace(struct page_table *pt, int page) {
                 if (candidate_bits & PROT_WRITE) {
                     //cout << "Writing dirty page #" << candidate_page << " back to disk" << endl;
                     disk_write(disk, candidate_page, pt->physmem + candidate_frame * PAGE_SIZE);
+                    diskWrites++;
                 }
                 page_table_set_entry(pt, candidate_page, candidate_frame, PROT_NONE);
                 frame = candidate_frame;
@@ -218,6 +219,7 @@ void custom_replace(struct page_table *pt, int page) {
     // Load new page
     //cout << "Reading page #" << page << " into frame #" << frame << endl;
     disk_read(disk, page, pt->physmem + frame * PAGE_SIZE);
+    diskReads++;
     page_table_set_entry(pt, page, frame, PROT_READ);
     pt->page_mapping[page] = frame;
 
